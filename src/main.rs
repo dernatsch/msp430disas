@@ -160,11 +160,6 @@ impl Iterator for MSP430Decoder<'_> {
             let insbegin = self.pc;
             self.pc += 2;
 
-            // println!(
-            //     "sreg={} ad={} isbyte={} as={} dreg={}",
-            //     sreg, ad, isb, _as, dreg
-            // );
-
             match ins & 0xf000 {
                 0x1000 => match ins & 0x0f80 {
                     0x280 => {
@@ -309,33 +304,57 @@ impl BasicBlock {
     }
 }
 
-fn main() {
-    let mem = std::fs::read("./memory.bin").unwrap();
-    let decoder = MSP430Decoder::new(0, &mem);
+struct MSP430Analyzer {
+    mem: Vec<u8>,
+    entry: usize,
+    instructions: BTreeMap<usize, Instruction>
+}
 
-    let entry = (&mem[0xfffe..]).get_u16_le() as usize;
-    let instructions = decoder.collect::<BTreeMap<usize, Instruction>>();
-    let mut targets = BTreeSet::new();
-    targets.insert(entry);
+impl MSP430Analyzer {
+    fn new(mem: Vec<u8>) -> Self {
+        let decoder = MSP430Decoder::new(0, &mem);
+        let entry = (&mem[0xfffe..]).get_u16_le() as usize;
+        let instructions = decoder.collect::<BTreeMap<usize, Instruction>>();
 
-    for (pc, ins) in instructions.iter() {
-        if ins.is_branch() {
-            targets.insert(pc + 2);
-
-            // All branches have a target, but sometimes we don't know it
-            // statically. For example for `ret` instructions.
-            if let Some(target) = ins.target() {
-                targets.insert(target as usize);
-            }
+        Self {
+            mem,
+            entry,
+            instructions
         }
     }
 
-    let sorted_targets: Vec<&usize> = targets.iter().collect();
-    let mut basic_blocks = Vec::new();
+    fn branch_targets(&self) -> Vec<usize> {
+        let mut targets = vec![self.entry];
 
-    for i in 0..sorted_targets.len()-1 {
-        basic_blocks.push(BasicBlock::new(i, *(sorted_targets[i]), sorted_targets[i+1]-2));
+        for (pc, ins) in self.instructions.iter() {
+            if ins.is_branch() {
+                targets.push(pc + 2);
+
+                if let Some(target) = ins.target() {
+                    targets.push(target as usize);
+                }
+            }
+        }
+
+        targets.sort();
+        targets
     }
 
-    println!("{:#x?}", basic_blocks);
+    fn basic_blocks(&self) -> Vec<BasicBlock> {
+        let mut ret = Vec::new();
+
+        let targets = self.branch_targets();
+        for i in 0..targets.len()-1 {
+            ret.push(BasicBlock::new(i, targets[i], targets[i+1]-2));
+        }
+
+        ret
+    }
+}
+
+fn main() {
+    let mem = std::fs::read("./memory.bin").unwrap();
+    let ana = MSP430Analyzer::new(mem);
+
+    println!("{:#x?}", ana.basic_blocks());
 }
