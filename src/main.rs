@@ -1,5 +1,5 @@
 use bytes::Buf;
-use std::collections::{BTreeSet, BTreeMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::From;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +53,26 @@ enum Operand {
     Immediate(u16),
 }
 
+impl std::fmt::Display for Operand {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match *self {
+            Self::Reg(r) => {
+                write!(f, "{:?}", r)?;
+            }
+            Self::Indexed(off, reg) => {
+                write!(f, "{:}({:?})", off as i16, reg)?;
+            }
+            Self::Immediate(imm) => {
+                write!(f, "#{:#x}", imm)?;
+            }
+            Self::IndexedInc(reg) => {
+                write!(f, "@{:?}+", reg)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Instruction {
     Unknown(u16),
@@ -96,6 +116,57 @@ enum Instruction {
     BR(Operand),
 }
 
+impl std::fmt::Display for Instruction {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match *self {
+            Instruction::JNE(off) => {
+                write!(f, "JNE #{:x}", off as i16)?;
+            }
+            Instruction::JNZ(off) => {
+                write!(f, "JNZ #{:x}", off as i16)?;
+            }
+            Instruction::JEQ(off) => {
+                write!(f, "JEQ #{:x}", off as i16)?;
+            }
+            Instruction::JZ (off) => {
+                write!(f, "JZ #{:x}", off as i16)?;
+            }
+            Instruction::JNC(off) => {
+                write!(f, "JNC #{:x}", off as i16)?;
+            }
+            Instruction::JC (off) => {
+                write!(f, "JC #{:x}", off as i16)?;
+            }
+            Instruction::JN (off) => {
+                write!(f, "JN #{:x}", off as i16)?;
+            }
+            Instruction::JGE(off) => {
+                write!(f, "JGE #{:x}", off as i16)?;
+            }
+            Instruction::JL (off) => {
+                write!(f, "JL #{:x}", off as i16)?;
+            }
+            Instruction::JMP(off) => {
+                write!(f, "JMP #{:x}", off as i16)?;
+            }
+            Instruction::MOV(a, b) => {
+                write!(f, "MOV {}, {}", a, b)?;
+            }
+            Instruction::MOVB(a, b) => {
+                write!(f, "MOV.B {}, {}", a, b)?;
+            }
+            Instruction::CALL(target) => {
+                write!(f, "CALL {}", target)?;
+            }
+            Instruction::BR(target) => {
+                write!(f, "BR {}", target)?;
+            }
+            _ => write!(f, "{:?}", self)?,
+        }
+        Ok(())
+    }
+}
+
 impl Instruction {
     fn is_branch(self) -> bool {
         self.target().is_some()
@@ -103,7 +174,7 @@ impl Instruction {
 
     fn is_unconditional(self) -> bool {
         match self {
-            | Self::JMP(_)
+            Self::JMP(_)
             | Self::CALL(_)
             | Self::RET
             | Self::RETI
@@ -149,6 +220,13 @@ impl<'a> MSP430Decoder<'a> {
     fn new(pc: usize, memory: &'a [u8]) -> Self {
         Self { memory, pc }
     }
+
+    /// Read a u16 from the current memory position and advance the pc.
+    fn get_imm(&mut self) -> u16 {
+        let imm = self.memory.get_u16_le();
+        self.pc += 2;
+        imm
+    }
 }
 
 impl Iterator for MSP430Decoder<'_> {
@@ -156,9 +234,8 @@ impl Iterator for MSP430Decoder<'_> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.memory.len() > 2 {
-            let ins = self.memory.get_u16_le();
             let insbegin = self.pc;
-            self.pc += 2;
+            let ins = self.get_imm();
 
             match ins & 0xf000 {
                 0x1000 => match ins & 0x0f80 {
@@ -168,16 +245,14 @@ impl Iterator for MSP430Decoder<'_> {
                         let operand = match ad {
                             0 => Operand::Reg(sreg.into()),
                             1 => {
-                                let offset = self.memory.get_u16_le();
-                                self.pc += 2;
+                                let offset = self.get_imm();
                                 Operand::Indexed(offset, sreg.into())
                             }
                             2 => Operand::Indexed(0, sreg.into()),
                             3 => {
                                 if sreg == 0 {
                                     // immediate
-                                    let imm = self.memory.get_u16_le();
-                                    self.pc += 2;
+                                    let imm = self.get_imm();
                                     Operand::Immediate(imm)
                                 } else {
                                     Operand::IndexedInc(sreg.into())
@@ -229,8 +304,7 @@ impl Iterator for MSP430Decoder<'_> {
                         let src = match _as {
                             0 => Operand::Reg(sreg.into()),
                             1 => {
-                                let offset = self.memory.get_u16_le();
-                                self.pc += 2;
+                                let offset = self.get_imm();
 
                                 Operand::Indexed(offset, sreg.into())
                             }
@@ -238,9 +312,7 @@ impl Iterator for MSP430Decoder<'_> {
                             3 => {
                                 if sreg == 0 {
                                     // immediate
-                                    let imm = self.memory.get_u16_le();
-                                    self.pc += 2;
-
+                                    let imm = self.get_imm();
                                     Operand::Immediate(imm)
                                 } else {
                                     Operand::IndexedInc(sreg.into())
@@ -252,8 +324,7 @@ impl Iterator for MSP430Decoder<'_> {
                         let dst = match ad {
                             0 => Operand::Reg(dreg.into()),
                             1 => {
-                                let offset = self.memory.get_u16_le();
-                                self.pc += 2;
+                                let offset = self.get_imm();
                                 Operand::Indexed(offset, dreg.into())
                             }
                             _ => panic!(),
@@ -296,18 +367,14 @@ struct BasicBlock {
 
 impl BasicBlock {
     fn new(id: usize, start: usize, end: usize) -> Self {
-        Self {
-            id,
-            start,
-            end
-        }
+        Self { id, start, end }
     }
 }
 
 struct MSP430Analyzer {
     mem: Vec<u8>,
     entry: usize,
-    instructions: BTreeMap<usize, Instruction>
+    instructions: BTreeMap<usize, Instruction>,
 }
 
 impl MSP430Analyzer {
@@ -319,7 +386,7 @@ impl MSP430Analyzer {
         Self {
             mem,
             entry,
-            instructions
+            instructions,
         }
     }
 
@@ -344,8 +411,8 @@ impl MSP430Analyzer {
         let mut ret = Vec::new();
 
         let targets = self.branch_targets();
-        for i in 0..targets.len()-1 {
-            ret.push(BasicBlock::new(i, targets[i], targets[i+1]-2));
+        for i in 0..targets.len() - 1 {
+            ret.push(BasicBlock::new(i, targets[i], targets[i + 1] - 2));
         }
 
         ret
@@ -356,5 +423,10 @@ fn main() {
     let mem = std::fs::read("./memory.bin").unwrap();
     let ana = MSP430Analyzer::new(mem);
 
-    println!("{:#x?}", ana.basic_blocks());
+    for (pc, ins) in ana.instructions {
+        match ins {
+            Instruction::Unknown(_) => {}
+            _ => println!("{:04x}: {}", pc, ins),
+        }
+    }
 }
