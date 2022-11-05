@@ -1,4 +1,5 @@
 use bytes::Buf;
+use std::collections::{BTreeSet, BTreeMap};
 use std::convert::From;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,16 +98,11 @@ enum Instruction {
 
 impl Instruction {
     fn is_branch(self) -> bool {
+        self.target().is_some()
+    }
+
+    fn is_unconditional(self) -> bool {
         match self {
-            Self::JNE(_)
-            | Self::JNZ(_)
-            | Self::JEQ(_)
-            | Self::JZ(_)
-            | Self::JNC(_)
-            | Self::JC(_)
-            | Self::JN(_)
-            | Self::JGE(_)
-            | Self::JL(_)
             | Self::JMP(_)
             | Self::CALL(_)
             | Self::RET
@@ -114,6 +110,32 @@ impl Instruction {
             | Self::MOV(_, Operand::Reg(Register::R0))
             | Self::BR(_) => true,
             _ => false,
+        }
+    }
+
+    fn target(self) -> Option<u16> {
+        match self {
+            Self::JNE(target)
+            | Self::JNZ(target)
+            | Self::JEQ(target)
+            | Self::JZ(target)
+            | Self::JNC(target)
+            | Self::JC(target)
+            | Self::JN(target)
+            | Self::JGE(target)
+            | Self::JL(target)
+            | Self::JMP(target) => Some(target),
+
+            Self::CALL(operand)
+            | Self::MOV(operand, Operand::Reg(Register::R0))
+            | Self::BR(operand) => match operand {
+                Operand::Immediate(target) => Some(target),
+                Operand::Reg(Register::R0) => todo!(),
+                Operand::Indexed(_off, Register::R0) => todo!(),
+                Operand::IndexedInc(Register::R0) => todo!(),
+                _ => None,
+            },
+            _ => None,
         }
     }
 }
@@ -270,13 +292,50 @@ impl Iterator for MSP430Decoder<'_> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BasicBlock {
+    id: usize,
+    start: usize,
+    end: usize,
+}
+
+impl BasicBlock {
+    fn new(id: usize, start: usize, end: usize) -> Self {
+        Self {
+            id,
+            start,
+            end
+        }
+    }
+}
+
 fn main() {
     let mem = std::fs::read("./memory.bin").unwrap();
     let decoder = MSP430Decoder::new(0, &mem);
 
-    for (addr, ins) in decoder {
+    let entry = (&mem[0xfffe..]).get_u16_le() as usize;
+    let instructions = decoder.collect::<BTreeMap<usize, Instruction>>();
+    let mut targets = BTreeSet::new();
+    targets.insert(entry);
+
+    for (pc, ins) in instructions.iter() {
         if ins.is_branch() {
-            println!("{:x} {:x?}", addr, ins)
+            targets.insert(pc + 2);
+
+            // All branches have a target, but sometimes we don't know it
+            // statically. For example for `ret` instructions.
+            if let Some(target) = ins.target() {
+                targets.insert(target as usize);
+            }
         }
     }
+
+    let sorted_targets: Vec<&usize> = targets.iter().collect();
+    let mut basic_blocks = Vec::new();
+
+    for i in 0..sorted_targets.len()-1 {
+        basic_blocks.push(BasicBlock::new(i, *(sorted_targets[i]), sorted_targets[i+1]-2));
+    }
+
+    println!("{:#x?}", basic_blocks);
 }
