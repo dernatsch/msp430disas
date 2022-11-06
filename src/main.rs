@@ -266,7 +266,7 @@ impl Iterator for MSP430Decoder<'_> {
     type Item = (usize, Instruction);
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.memory.len() > 2 {
+        if self.memory.len() >= 2 {
             let insbegin = self.pc;
             let ins = self.get_imm();
 
