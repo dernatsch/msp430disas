@@ -78,27 +78,27 @@ enum Instruction {
     Unknown(u16),
     MOV(Operand, Operand),
     MOVB(Operand, Operand),
-    ADD,
+    ADD(Operand, Operand),
     ADDB,
-    ADDC,
+    ADDC(Operand, Operand),
     ADDCB,
-    SUBC,
+    SUBC(Operand, Operand),
     SUBCB,
-    SUB,
+    SUB(Operand, Operand),
     SUBB,
-    CMP,
+    CMP(Operand, Operand),
     CMPB,
-    DADD,
+    DADD(Operand, Operand),
     DADDB,
-    BIT,
+    BIT(Operand, Operand),
     BITB,
-    BIC,
+    BIC(Operand, Operand),
     BICB,
-    BIS,
+    BIS(Operand, Operand),
     BISB,
-    XOR,
+    XOR(Operand, Operand),
     XORB,
-    AND,
+    AND(Operand, Operand),
     ANDB,
     JNE(u16),
     JNZ(u16),
@@ -128,22 +128,22 @@ impl std::fmt::Display for Instruction {
             Instruction::JEQ(off) => {
                 write!(f, "JEQ #{:x}", off as i16)?;
             }
-            Instruction::JZ (off) => {
+            Instruction::JZ(off) => {
                 write!(f, "JZ #{:x}", off as i16)?;
             }
             Instruction::JNC(off) => {
                 write!(f, "JNC #{:x}", off as i16)?;
             }
-            Instruction::JC (off) => {
+            Instruction::JC(off) => {
                 write!(f, "JC #{:x}", off as i16)?;
             }
-            Instruction::JN (off) => {
+            Instruction::JN(off) => {
                 write!(f, "JN #{:x}", off as i16)?;
             }
             Instruction::JGE(off) => {
                 write!(f, "JGE #{:x}", off as i16)?;
             }
-            Instruction::JL (off) => {
+            Instruction::JL(off) => {
                 write!(f, "JL #{:x}", off as i16)?;
             }
             Instruction::JMP(off) => {
@@ -160,6 +160,39 @@ impl std::fmt::Display for Instruction {
             }
             Instruction::BR(target) => {
                 write!(f, "BR {}", target)?;
+            }
+            Instruction::ADD(a, b) => {
+                write!(f, "ADD {}, {}", a, b)?;
+            }
+            Instruction::SUB(a, b) => {
+                write!(f, "SUB {}, {}", a, b)?;
+            }
+            Instruction::CMP(a, b) => {
+                write!(f, "CMP {}, {}", a, b)?;
+            }
+            Instruction::BIT(a, b) => {
+                write!(f, "BIT {}, {}", a, b)?;
+            }
+            Instruction::BIS(a, b) => {
+                write!(f, "BIS {}, {}", a, b)?;
+            }
+            Instruction::BIC(a, b) => {
+                write!(f, "BIC {}, {}", a, b)?;
+            }
+            Instruction::XOR(a, b) => {
+                write!(f, "XOR {}, {}", a, b)?;
+            }
+            Instruction::AND(a, b) => {
+                write!(f, "AND {}, {}", a, b)?;
+            }
+            Instruction::ADDC(a, b) => {
+                write!(f, "AND {}, {}", a, b)?;
+            }
+            Instruction::SUBC(a, b) => {
+                write!(f, "AND {}, {}", a, b)?;
+            }
+            Instruction::DADD(a, b) => {
+                write!(f, "DADD {}, {}", a, b)?;
             }
             _ => write!(f, "{:?}", self)?,
         }
@@ -289,67 +322,73 @@ impl Iterator for MSP430Decoder<'_> {
                         _ => Some((insbegin, Instruction::Unknown(ins))),
                     }
                 }
-                0x4000 => {
-                    // MOV, MOV.B, RET
+                0x4000..=0xf000 => {
                     let sreg = (ins & 0xf00) >> 8;
                     let dreg = ins & 0x0f;
                     let ad = (ins & 0x80) >> 7;
                     let _as = (ins & 0x30) >> 4;
                     let isb = (ins & 0x40) != 0;
 
-                    if sreg == 1 && _as == 3 && ad == 0 && dreg == 0 {
-                        Some((insbegin, Instruction::RET))
-                    } else {
-                        // src operand
-                        let src = match _as {
-                            0 => Operand::Reg(sreg.into()),
-                            1 => {
-                                let offset = self.get_imm();
+                    let src = match _as {
+                        0 => Operand::Reg(sreg.into()),
+                        1 => {
+                            let offset = self.get_imm();
 
-                                Operand::Indexed(offset, sreg.into())
+                            Operand::Indexed(offset, sreg.into())
+                        }
+                        2 => Operand::Indexed(0, sreg.into()),
+                        3 => {
+                            if sreg == 0 {
+                                // immediate
+                                let imm = self.get_imm();
+                                Operand::Immediate(imm)
+                            } else {
+                                Operand::IndexedInc(sreg.into())
                             }
-                            2 => Operand::Indexed(0, sreg.into()),
-                            3 => {
-                                if sreg == 0 {
-                                    // immediate
-                                    let imm = self.get_imm();
-                                    Operand::Immediate(imm)
+                        }
+                        _ => panic!(),
+                    };
+
+                    let dst = match ad {
+                        0 => Operand::Reg(dreg.into()),
+                        1 => {
+                            let offset = self.get_imm();
+                            Operand::Indexed(offset, dreg.into())
+                        }
+                        _ => panic!(),
+                    };
+
+                    match ins & 0xf000 {
+                        0x4000 => {
+                            if src == Operand::IndexedInc(Register::R1)
+                                && dst == Operand::Reg(Register::R0) {
+                                Some((insbegin, Instruction::RET))
+                            } else {
+                                // src operand
+
+                                if dst == Operand::Reg(Register::R0) {
+                                    Some((insbegin, Instruction::BR(src)))
+                                } else if isb {
+                                    Some((insbegin, Instruction::MOVB(src, dst)))
                                 } else {
-                                    Operand::IndexedInc(sreg.into())
+                                    Some((insbegin, Instruction::MOV(src, dst)))
                                 }
                             }
-                            _ => panic!(),
-                        };
-
-                        let dst = match ad {
-                            0 => Operand::Reg(dreg.into()),
-                            1 => {
-                                let offset = self.get_imm();
-                                Operand::Indexed(offset, dreg.into())
-                            }
-                            _ => panic!(),
-                        };
-
-                        if dst == Operand::Reg(Register::R0) {
-                            Some((insbegin, Instruction::BR(src)))
-                        } else if isb {
-                            Some((insbegin, Instruction::MOVB(src, dst)))
-                        } else {
-                            Some((insbegin, Instruction::MOV(src, dst)))
                         }
+                        0x5000 => Some((insbegin, Instruction::ADD(src,dst))),
+                        0x6000 => Some((insbegin, Instruction::ADDC(src,dst))),
+                        0x7000 => Some((insbegin, Instruction::SUBC(src,dst))),
+                        0x8000 => Some((insbegin, Instruction::SUB(src,dst))),
+                        0x9000 => Some((insbegin, Instruction::CMP(src,dst))),
+                        0xa000 => Some((insbegin, Instruction::DADD(src,dst))),
+                        0xb000 => Some((insbegin, Instruction::BIT(src,dst))),
+                        0xc000 => Some((insbegin, Instruction::BIC(src,dst))),
+                        0xd000 => Some((insbegin, Instruction::BIS(src,dst))),
+                        0xe000 => Some((insbegin, Instruction::XOR(src,dst))),
+                        0xf000 => Some((insbegin, Instruction::AND(src,dst))),
+                        _ => unreachable!("ins={:x}", ins)
                     }
                 }
-                0x5000 => Some((insbegin, Instruction::ADD)),
-                0x6000 => Some((insbegin, Instruction::ADDC)),
-                0x7000 => Some((insbegin, Instruction::SUBC)),
-                0x8000 => Some((insbegin, Instruction::SUB)),
-                0x9000 => Some((insbegin, Instruction::CMP)),
-                0xa000 => Some((insbegin, Instruction::DADD)),
-                0xb000 => Some((insbegin, Instruction::BIT)),
-                0xc000 => Some((insbegin, Instruction::BIC)),
-                0xd000 => Some((insbegin, Instruction::BIS)),
-                0xe000 => Some((insbegin, Instruction::XOR)),
-                0xf000 => Some((insbegin, Instruction::AND)),
                 _ => Some((insbegin, Instruction::Unknown(ins))),
             }
         } else {
